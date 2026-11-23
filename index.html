@@ -55,6 +55,16 @@ h1 .x{color:#ff8a3d}h1 .o{color:#3dc8ff}
 #toast{position:absolute;top:70px;left:50%;transform:translateX(-50%);background:#ff4d6d;color:#fff;font-weight:800;padding:8px 16px;border-radius:10px;opacity:0;transition:opacity .25s;pointer-events:none}
 #toast.on{opacity:1}
 #loading{z-index:5}
+#floors{position:absolute;right:10px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:6px}
+#floors button{width:54px;height:46px;border-radius:10px;border:2px solid #2d3266;background:rgba(26,29,58,.95);cursor:pointer;font-weight:800}
+#floors button.sel{border-color:#ffd23d;background:#ffd23d;color:#1a1300}
+#cards{position:absolute;left:50%;transform:translateX(-50%);bottom:calc(96px + env(safe-area-inset-bottom));display:flex;gap:6px;align-items:flex-end}
+#cards .who{font-size:12px;opacity:.75;align-self:center;margin-left:6px;white-space:nowrap}
+.uno{width:48px;height:70px;border-radius:9px;border:3px solid #fff;background:#333;color:#fff;font-weight:900;font-size:19px;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 0 rgba(0,0,0,.35);text-shadow:0 2px 0 rgba(0,0,0,.5)}
+.uno:disabled{opacity:.4;cursor:default}
+.uno.wild{background:conic-gradient(#e53935 0 25%,#fdd835 0 50%,#43a047 0 75%,#1e88e5 0)}
+.uno.top{transform:rotate(-8deg);margin-right:14px;cursor:default}
+body.mega #hint{bottom:calc(178px + env(safe-area-inset-bottom))}
 </style>
 </head>
 <body>
@@ -63,7 +73,8 @@ h1 .x{color:#ff8a3d}h1 .o{color:#3dc8ff}
   <h1>Nugget <span class="x">Tac</span> <span class="o">Toe</span></h1>
   <p class="sub">Tic tac toe, but it got way out of hand.</p>
   <div class="modes">
-    <button class="mode sel" data-mode="chaos"><b>♞ Chaos Grid</b><span>Endless board. Place anywhere, and move knights, rooks and bishops to capture enemy pieces.</span></button>
+    <button class="mode sel" data-mode="mega"><b>⭐ Everything</b><span>All of it at once: endless board, 4 floors in 3D, chess pieces AND UNO cards.</span></button>
+    <button class="mode" data-mode="chaos"><b>♞ Chaos Grid</b><span>Endless board. Place anywhere, and move knights, rooks and bishops to capture enemy pieces.</span></button>
     <button class="mode" data-mode="cube"><b>🧊 Cube 3D</b><span>A rotating cube. Lines count in every direction, even straight through the middle.</span></button>
   </div>
   <div class="opts">
@@ -97,7 +108,7 @@ h1 .x{color:#ff8a3d}h1 .o{color:#3dc8ff}
 <script type="module">
 const $=s=>document.querySelector(s);
 const COL=['#ff8a3d','#3dc8ff'], XO=['X','O'];
-const cfg={mode:'chaos',opp:'bot-normal',win:4,cube:4};
+const cfg={mode:'mega',opp:'bot-normal',win:4,cube:4};
 const isBot=p=>cfg.opp!=='2p'&&p===1;
 
 /* ---------- menu ---------- */
@@ -109,7 +120,7 @@ document.querySelectorAll('.seg').forEach(seg=>seg.addEventListener('click',e=>{
 document.querySelectorAll('.mode').forEach(m=>m.addEventListener('click',()=>{
   document.querySelectorAll('.mode').forEach(x=>x.classList.toggle('sel',x===m));
   cfg.mode=m.dataset.mode;
-  $('#rowWin').style.display=cfg.mode==='chaos'?'':'none';
+  $('#rowWin').style.display=cfg.mode!=='cube'?'':'none';
   $('#rowCube').style.display=cfg.mode==='cube'?'':'none';
 }));
 function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('on',s.id===id));}
@@ -144,7 +155,7 @@ async function startGame(){
   show('game');
   if(cfg.mode==='chaos'){game=chaosGame();return;}
   $('#loading').classList.add('on');
-  try{game=await cubeGame();}
+  try{game=await(cfg.mode==='mega'?megaGame():cubeGame());}
   catch(err){console.error(err);alert('Could not load the 3D mode (it needs internet to load Three.js).');show('menu');}
   $('#loading').classList.remove('on');
 }
@@ -622,6 +633,433 @@ async function cubeGame(){
       <li>Lines count in every direction: along a row, up a column, through the layers, and diagonally straight through the middle of the cube.</li>
       <li>Drag to spin the cube. Scroll or pinch to zoom. ⌖ resets the view.</li>
       <li>Use the <b>Spread</b> slider to pull the layers apart so you can see inside.</li></ul>`
+  };
+}
+
+/* =====================================================
+   EVERYTHING MODE: endless board + 3D floors + chess + UNO
+   ===================================================== */
+async function megaGame(){
+  const THREE=await import('three');
+  const{OrbitControls}=await import('three/addons/controls/OrbitControls.js');
+  const N=cfg.win,F=N,FH=1.7,box=$('#three'),ac=new AbortController(),sig={signal:ac.signal};
+  box.style.display='block';document.body.classList.add('mega');
+  const ui=document.createElement('div');ui.innerHTML='<div id="floors"></div><div id="cards"></div>';$('#game').appendChild(ui);
+  let alive=true,first=0,botTimer;
+  let cells,turn,hands,cardH,top,trayT,moveKey,over,moveCount,last,winCells,floor=0,pending,placesLeft,placed,skipNext,cardUsed;
+  const K=(x,f,z)=>x+','+f+','+z,PK=s=>s.split(',').map(Number),inF=f=>f>=0&&f<F;
+  const who=p=>isBot(p)?'Bot':cfg.opp==='2p'?XO[p]:'You';
+
+  // directions: [dx, dFloor, dz]
+  const D13=[],R6=[],B12=[],N24=[];
+  for(let a=-1;a<=1;a++)for(let b=-1;b<=1;b++)for(let c=-1;c<=1;c++){
+    const nz=(a?1:0)+(b?1:0)+(c?1:0);if(!nz)continue;
+    if((a||b||c)>0)D13.push([a,b,c]);
+    if(nz===1)R6.push([a,b,c]);if(nz===2)B12.push([a,b,c]);
+  }
+  for(const p of[[0,1],[0,2],[1,0],[1,2],[2,0],[2,1]])for(const s1 of[1,-1])for(const s2 of[1,-1]){const v=[0,0,0];v[p[0]]=s1;v[p[1]]=2*s2;N24.push(v);}
+
+  // UNO cards
+  const CCOL=['#e53935','#fdd835','#43a047','#1e88e5'],CSYM={skip:'⊘',rev:'⇄',p2:'+2',wild:'W'};
+  const CNAME={skip:'Skip',rev:'Reverse',p2:'Draw Two',wild:'Wild'};
+  const CDESC={skip:'Your opponent misses their next turn',rev:'Flip one enemy mark to your side',p2:'Place 2 pieces this turn',wild:'Blast away any enemy piece'};
+  const drawCard=()=>Math.random()<0.15?{t:'wild',c:-1}:{t:['skip','rev','p2'][Math.floor(Math.random()*3)],c:Math.floor(Math.random()*4)};
+
+  /* --- rules --- */
+  function near(x,z){for(const key of cells.keys()){const[a,,c]=PK(key);if(Math.abs(a-x)<=PLACE_DIST&&Math.abs(c-z)<=PLACE_DIST)return true;}return false;}
+  const canPlace=(x,f,z)=>inF(f)&&!cells.has(K(x,f,z))&&(cells.size===0||near(x,z));
+  function placeCells(fl){
+    const s=new Set();if(!cells.size){s.add(K(0,fl??0,0));return s;}
+    const cols=new Set();
+    for(const key of cells.keys()){const[x,,z]=PK(key);for(let dx=-PLACE_DIST;dx<=PLACE_DIST;dx++)for(let dz=-PLACE_DIST;dz<=PLACE_DIST;dz++)cols.add((x+dx)+','+(z+dz));}
+    for(const col of cols){const[x,z]=col.split(',').map(Number);
+      for(let f=0;f<F;f++){if(fl!==undefined&&f!==fl)continue;const kk=K(x,f,z);if(!cells.has(kk))s.add(kk);}}
+    return s;
+  }
+  function targets(x,f,z){
+    const c=cells.get(K(x,f,z));if(!c||c.t==='S')return[];
+    const out=[];
+    if(c.t==='N'){for(const[a,b,d]of N24){if(!inF(f+b))continue;const o=cells.get(K(x+a,f+b,z+d));if(!o||o.p!==c.p)out.push([x+a,f+b,z+d,!!o]);}}
+    else for(const[a,b,d]of(c.t==='R'?R6:B12)){
+      for(let s=1;s<=RANGE;s++){const nx=x+a*s,nf=f+b*s,nz=z+d*s;if(!inF(nf))break;
+        const o=cells.get(K(nx,nf,nz));if(!o){out.push([nx,nf,nz,false]);continue;}
+        if(o.p!==c.p)out.push([nx,nf,nz,true]);break;}
+    }
+    return out;
+  }
+  function lineAt(x,f,z,p){
+    for(const[a,b,d]of D13){
+      const L=[[x,f,z]];
+      for(let s=1;;s++){const c=cells.get(K(x+a*s,f+b*s,z+d*s));if(c&&c.p===p)L.push([x+a*s,f+b*s,z+d*s]);else break;}
+      for(let s=1;;s++){const c=cells.get(K(x-a*s,f-b*s,z-d*s));if(c&&c.p===p)L.unshift([x-a*s,f-b*s,z-d*s]);else break;}
+      if(L.length>=N)return L;
+    }
+    return null;
+  }
+
+  /* --- turn flow --- */
+  function reset(){
+    clearTimeout(botTimer);
+    cells=new Map();turn=first;hands=[{N:2,R:2,B:2},{N:2,R:2,B:2}];
+    cardH=[[drawCard(),drawCard()],[drawCard(),drawCard()]];
+    do{top=drawCard();}while(top.t==='wild');
+    over=false;moveCount=0;last=null;winCells=null;skipNext=false;floor=0;
+    beginTurn();
+  }
+  function beginTurn(){
+    if(cardH[turn].length<5)cardH[turn].push(drawCard());
+    cardUsed=false;placesLeft=1;placed=0;pending=null;trayT='S';moveKey=null;
+    updateUI();maybeBot();
+  }
+  function checkWin(x,f,z,p){const w=lineAt(x,f,z,p);if(w){winCells=w;over=true;updateUI();finish(p);return true;}return false;}
+  function doPlace(x,f,z,t){
+    const p=turn;if(t!=='S'&&hands[p][t]<=0)t='S';
+    cells.set(K(x,f,z),{p,t});if(t!=='S')hands[p][t]--;
+    last=[x,f,z];placed++;placesLeft--;
+    if(checkWin(x,f,z,p))return;
+    if(placesLeft>0){trayT='S';updateUI();maybeBot();return;}
+    endTurn();
+  }
+  function doMove(fx,ff,fz,tx,tf,tz){
+    const c=cells.get(K(fx,ff,fz)),cap=cells.get(K(tx,tf,tz));
+    cells.delete(K(fx,ff,fz));cells.set(K(tx,tf,tz),c);last=[tx,tf,tz];
+    if(cap)toast(`${PNAME[c.t]} captured a ${cap.t==='S'?'mark':PNAME[cap.t]}!`);
+    if(checkWin(tx,tf,tz,c.p))return;
+    endTurn();
+  }
+  function endTurn(){
+    moveCount++;
+    if(moveCount>=400){over=true;updateUI();finish(-1);return;}
+    if(skipNext){skipNext=false;toast(`${who(1-turn)} got skipped!`);}else turn^=1;
+    beginTurn();
+  }
+  const playable=(cd,p)=>{
+    if(!(cd.t==='wild'||top.c<0||cd.c===top.c||cd.t===top.t))return false;
+    const vals=[...cells.values()];
+    if(cd.t==='rev')return vals.some(c=>c.p!==p&&c.t==='S');
+    if(cd.t==='wild')return vals.some(c=>c.p!==p);
+    return true;
+  };
+  function playCard(i){
+    const p=turn,cd=cardH[p][i];
+    if(over||cardUsed||placed||!cd||!playable(cd,p))return false;
+    cardH[p].splice(i,1);top=cd;cardUsed=true;moveKey=null;
+    const uno=cardH[p].length===1?' · UNO!':'';
+    if(cd.t==='skip'){skipNext=true;toast(`${who(p)}: Skip!${uno}`);}
+    else if(cd.t==='p2'){placesLeft=2;toast(`${who(p)}: Draw Two!${uno}`);}
+    else{pending=cd.t;toast(`${who(p)}: ${CNAME[cd.t]}!${uno}`);}
+    updateUI();return true;
+  }
+  function resolvePending(key){
+    const c=cells.get(key),p=turn;
+    if(!c||c.p===p||(pending==='rev'&&c.t!=='S')){toast(pending==='rev'?'Pick an enemy mark (not a chess piece)':'Pick an enemy piece');return;}
+    const[x,f,z]=PK(key);last=[x,f,z];
+    if(pending==='rev'){c.p=p;pending=null;if(checkWin(x,f,z,p))return;}
+    else{cells.delete(key);pending=null;}
+    updateUI();maybeBot();
+  }
+
+  /* --- clicks --- */
+  function clickKey(key){
+    if(over||isBot(turn))return;
+    if(pending){resolvePending(key);return;}
+    const[x,f,z]=PK(key),c=cells.get(key);
+    if(moveKey){const[a,b,d]=PK(moveKey);
+      if(targets(a,b,d).some(t=>t[0]===x&&t[1]===f&&t[2]===z)){doMove(a,b,d,x,f,z);return;}}
+    if(c&&c.p===turn&&c.t!=='S'){
+      if(placed){toast('Finish placing first!');return;}
+      moveKey=moveKey===key?null:key;
+      if(moveKey&&!targets(x,f,z).length){toast('That piece is stuck!');moveKey=null;}
+      updateUI();return;
+    }
+    moveKey=null;
+    if(!c&&canPlace(x,f,z)){doPlace(x,f,z,trayT);return;}
+    updateUI();
+  }
+
+  /* --- three.js scene --- */
+  const renderer=new THREE.WebGLRenderer({antialias:true});
+  renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);
+  box.appendChild(renderer.domElement);
+  const scene=new THREE.Scene();scene.background=new THREE.Color(0x0d1020);
+  const camera=new THREE.PerspectiveCamera(50,innerWidth/innerHeight,0.1,500);
+  const controls=new OrbitControls(camera,renderer.domElement);
+  controls.enableDamping=true;controls.screenSpacePanning=false;controls.minDistance=3;controls.maxDistance=60;
+  scene.add(new THREE.AmbientLight(0xffffff,0.8));
+  const dl=new THREE.DirectionalLight(0xffffff,1.4);dl.position.set(6,14,8);scene.add(dl);
+  const pos=(x,f,z)=>new THREE.Vector3(x,f*FH,z);
+  function center(){
+    let a=0,b=0,n=0;for(const key of cells.keys()){const[x,,z]=PK(key);a+=x;b+=z;n++;}
+    const t=new THREE.Vector3(n?a/n:0,FH*(F-1)/2,n?b/n:0);
+    controls.target.copy(t);camera.position.set(t.x+7,t.y+9,t.z+11);controls.update();
+  }
+  center();
+
+  const gridG=new THREE.Group(),pieceG=new THREE.Group(),tgtG=new THREE.Group();scene.add(gridG,pieceG,tgtG);
+  const gridOn=new THREE.LineBasicMaterial({color:0xaab0ff,transparent:true,opacity:0.5});
+  const gridOff=new THREE.LineBasicMaterial({color:0x6670cc,transparent:true,opacity:0.12});
+  const plane=new THREE.Mesh(new THREE.PlaneGeometry(4000,4000),new THREE.MeshBasicMaterial({visible:false}));plane.rotation.x=-Math.PI/2;scene.add(plane);
+  const plate=new THREE.Mesh(new THREE.PlaneGeometry(1,1),new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.06,side:THREE.DoubleSide,depthWrite:false}));
+  plate.rotation.x=-Math.PI/2;scene.add(plate);
+  const LIT_MAX=3000;
+  const lit=new THREE.InstancedMesh(new THREE.PlaneGeometry(0.86,0.86).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({transparent:true,opacity:0.22,depthWrite:false,side:THREE.DoubleSide}),LIT_MAX);
+  lit.count=0;scene.add(lit);
+  const ghost=new THREE.Mesh(new THREE.PlaneGeometry(0.92,0.92).rotateX(-Math.PI/2),new THREE.MeshBasicMaterial({transparent:true,opacity:0.55,depthWrite:false,side:THREE.DoubleSide}));
+  ghost.visible=false;scene.add(ghost);
+  const ringGeo=new THREE.TorusGeometry(0.44,0.05,8,32);
+  const selRing=new THREE.Mesh(ringGeo,new THREE.MeshBasicMaterial({color:0xffd23d}));selRing.rotation.x=-Math.PI/2;selRing.visible=false;scene.add(selRing);
+  const lastRing=new THREE.Mesh(ringGeo,new THREE.MeshBasicMaterial({color:0xffffff,transparent:true,opacity:0.35}));lastRing.rotation.x=-Math.PI/2;lastRing.visible=false;scene.add(lastRing);
+  const dotGeo=new THREE.SphereGeometry(0.16,12,8),dotMat=new THREE.MeshBasicMaterial({color:0x50e68c});
+  const capMat=new THREE.MeshBasicMaterial({color:0xff4d6d});
+  const matX=new THREE.MeshStandardMaterial({color:0xff8a3d,emissive:0x552200,roughness:.4});
+  const matO=new THREE.MeshStandardMaterial({color:0x3dc8ff,emissive:0x0a3550,roughness:.4});
+  const barGeo=new THREE.BoxGeometry(0.66,0.14,0.14),torGeo=new THREE.TorusGeometry(0.26,0.08,14,36);
+  const badgeTex={};
+  function badge(t,p){
+    const id=t+p;
+    if(!badgeTex[id]){const c=document.createElement('canvas');c.width=c.height=64;const g=c.getContext('2d');
+      g.fillStyle='#fff';g.beginPath();g.arc(32,32,28,0,7);g.fill();g.lineWidth=5;g.strokeStyle=COL[p];g.stroke();
+      g.fillStyle='#111';g.font='40px serif';g.textAlign='center';g.textBaseline='middle';g.fillText(GLYPH[t],32,35);
+      badgeTex[id]=new THREE.CanvasTexture(c);}
+    const s=new THREE.Sprite(new THREE.SpriteMaterial({map:badgeTex[id]}));s.scale.setScalar(0.34);s.position.set(0.3,0.3,0.06);return s;
+  }
+  function makePiece(c){
+    const g=new THREE.Group();
+    if(c.p===0){const a=new THREE.Mesh(barGeo,matX),b=new THREE.Mesh(barGeo,matX);a.rotation.z=Math.PI/4;b.rotation.z=-Math.PI/4;g.add(a,b);}
+    else g.add(new THREE.Mesh(torGeo,matO));
+    if(c.t!=='S')g.add(badge(c.t,c.p));
+    return g;
+  }
+  const pmap=new Map();let winMesh=null;
+
+  function sync(){
+    if(!alive)return;
+    let x0=-3,x1=3,z0=-3,z1=3;
+    for(const key of cells.keys()){const[x,,z]=PK(key);x0=Math.min(x0,x-4);x1=Math.max(x1,x+4);z0=Math.min(z0,z-4);z1=Math.max(z1,z+4);}
+    for(const ch of[...gridG.children]){gridG.remove(ch);ch.geometry.dispose();}
+    for(let f=0;f<F;f++){
+      const pts=[],y=f*FH;
+      for(let x=x0;x<=x1+1;x++)pts.push(new THREE.Vector3(x-.5,y,z0-.5),new THREE.Vector3(x-.5,y,z1+.5));
+      for(let z=z0;z<=z1+1;z++)pts.push(new THREE.Vector3(x0-.5,y,z-.5),new THREE.Vector3(x1+.5,y,z-.5));
+      gridG.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts),f===floor?gridOn:gridOff));
+    }
+    plate.scale.set(x1-x0+1,z1-z0+1,1);plate.position.set((x0+x1)/2,floor*FH-0.02,(z0+z1)/2);plate.material.color.set(COL[turn]);
+    plane.position.y=floor*FH;
+    // lit squares on the current floor
+    let n=0;
+    if(!over&&!isBot(turn)&&!moveKey&&!pending){
+      lit.material.color.set(COL[turn]);const m=new THREE.Matrix4();
+      for(const kk of placeCells(floor)){if(n>=LIT_MAX)break;const[x,f,z]=PK(kk);m.makeTranslation(x,f*FH+0.01,z);lit.setMatrixAt(n++,m);}
+    }
+    lit.count=n;lit.instanceMatrix.needsUpdate=true;
+    ghost.material.color.set(COL[turn]);
+    // pieces
+    for(const[key,g]of pmap){const c=cells.get(key);if(!c||g.userData.sig!==c.p+c.t){pieceG.remove(g);pmap.delete(key);}}
+    for(const[key,c]of cells){
+      if(pmap.has(key))continue;const[x,f,z]=PK(key);
+      const g=makePiece(c);g.position.copy(pos(x,f,z));g.position.y+=0.35;
+      g.userData={key,sig:c.p+c.t};g.scale.setScalar(.01);pieceG.add(g);pmap.set(key,g);
+    }
+    // move targets
+    for(const ch of[...tgtG.children])tgtG.remove(ch);
+    if(moveKey){
+      const[a,b,d]=PK(moveKey);
+      for(const[x,f,z,cap]of targets(a,b,d)){
+        const m=new THREE.Mesh(cap?ringGeo:dotGeo,cap?capMat:dotMat);m.position.copy(pos(x,f,z));
+        if(cap)m.rotation.x=-Math.PI/2;else m.position.y+=0.2;
+        m.userData.key=K(x,f,z);tgtG.add(m);
+      }
+      selRing.visible=true;selRing.position.copy(pos(a,b,d));selRing.position.y+=0.02;
+    }else selRing.visible=false;
+    lastRing.visible=!!last&&!moveKey;if(last){lastRing.position.copy(pos(...last));lastRing.position.y+=0.02;}
+    // win line
+    if(winMesh){scene.remove(winMesh);winMesh.geometry.dispose();winMesh=null;}
+    if(winCells){
+      for(const c of winCells){const g=pmap.get(K(...c));if(g)g.userData.win=true;}
+      const a=pos(...winCells[0]),b=pos(...winCells[winCells.length-1]);a.y+=0.35;b.y+=0.35;
+      winMesh=new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,a.distanceTo(b)+0.8,12),new THREE.MeshBasicMaterial({color:0xffd23d}));
+      winMesh.position.copy(a).add(b).multiplyScalar(.5);
+      winMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),b.clone().sub(a).normalize());
+      scene.add(winMesh);
+    }
+  }
+
+  /* --- UI --- */
+  function updateUI(){
+    setTurn(turn,over);
+    if(!over&&!isBot(turn)){let ex='';if(pending)ex=' · pick a target';else if(placesLeft>1)ex=' · place 2!';$('#turnText').textContent+=ex;}
+    // chess tray
+    const tray=$('#tray');tray.innerHTML='';
+    const h=hands[turn],locked=over||isBot(turn)||!!pending;
+    for(const t of['S','N','R','B']){
+      const b=document.createElement('button');
+      b.className='tb'+(trayT===t&&!moveKey&&!locked?' sel':'');b.style.setProperty('--c',COL[turn]);
+      b.innerHTML=`<i>${t==='S'?(turn?'◯':'✕'):GLYPH[t]}</i><small>${PNAME[t]} ${t==='S'?'∞':'×'+h[t]}</small>`;
+      if(locked||(t!=='S'&&h[t]<=0))b.disabled=true;
+      b.onclick=()=>{trayT=t;moveKey=null;updateUI();};tray.appendChild(b);
+    }
+    // UNO cards
+    const cd=$('#cards');cd.innerHTML='';
+    const tp=document.createElement('div');tp.className='uno top'+(top.t==='wild'?' wild':'');
+    if(top.c>=0)tp.style.background=CCOL[top.c];tp.textContent=CSYM[top.t];tp.title='Top card: '+CNAME[top.t];cd.appendChild(tp);
+    const showP=cfg.opp==='2p'?turn:0;
+    cardH[showP].forEach((card,i)=>{
+      const b=document.createElement('button');b.className='uno'+(card.t==='wild'?' wild':'');
+      if(card.c>=0)b.style.background=CCOL[card.c];b.textContent=CSYM[card.t];b.title=`${CNAME[card.t]}: ${CDESC[card.t]}`;
+      if(over||showP!==turn||cardUsed||placed||pending||!playable(card,turn))b.disabled=true;
+      b.onclick=()=>{if(playCard(i))maybeBot();};cd.appendChild(b);
+    });
+    if(cfg.opp!=='2p'){const w=document.createElement('span');w.className='who';w.textContent=`Bot: ${cardH[1].length} 🂠`;cd.appendChild(w);}
+    // floors
+    const fl=$('#floors');fl.innerHTML='';
+    for(let f=F-1;f>=0;f--){const b=document.createElement('button');b.textContent='F'+(f+1);if(f===floor)b.className='sel';
+      b.onclick=()=>{floor=f;updateUI();};fl.appendChild(b);}
+    $('#hint').textContent=over||isBot(turn)?'':pending==='rev'?'Tap an enemy mark to flip it to your side'
+      :pending==='wild'?'Tap any enemy piece to blast it'
+      :moveKey?'Tap a green dot to move (can be on other floors!) · red ring = capture'
+      :`Pick a floor (right) · place on a lit square · play a card first if you want · ${N} in a row in ANY 3D direction`;
+    sync();
+  }
+
+  /* --- input --- */
+  const ray=new THREE.Raycaster(),mv=new THREE.Vector2(),el=renderer.domElement;let down=null;
+  function setRay(e){const r=el.getBoundingClientRect();mv.x=((e.clientX-r.left)/r.width)*2-1;mv.y=-((e.clientY-r.top)/r.height)*2+1;ray.setFromCamera(mv,camera);}
+  function keyFromHit(o){while(o&&!(o.userData&&o.userData.key))o=o.parent;return o?o.userData.key:null;}
+  function pickKey(e){
+    setRay(e);
+    const objHit=ray.intersectObjects([...tgtG.children,...pieceG.children],true)[0];
+    const pl=ray.intersectObject(plane,false)[0];
+    if(objHit&&(!pl||objHit.distance<pl.distance+0.6))return keyFromHit(objHit.object);
+    if(pl)return K(Math.round(pl.point.x),floor,Math.round(pl.point.z));
+    return null;
+  }
+  el.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY};},sig);
+  el.addEventListener('pointermove',e=>{
+    if(e.pointerType!=='mouse'||down||over||isBot(turn)||moveKey||pending){ghost.visible=false;return;}
+    setRay(e);const pl=ray.intersectObject(plane,false)[0];
+    if(pl){const x=Math.round(pl.point.x),z=Math.round(pl.point.z);
+      if(canPlace(x,floor,z)){ghost.visible=true;ghost.position.set(x,floor*FH+0.02,z);return;}}
+    ghost.visible=false;
+  },sig);
+  el.addEventListener('pointerup',e=>{
+    if(down&&Math.hypot(e.clientX-down.x,e.clientY-down.y)<7){const key=pickKey(e);if(key)clickKey(key);}
+    down=null;
+  },sig);
+  addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);},sig);
+  addEventListener('keydown',e=>{
+    if(over||isBot(turn))return;
+    const t={'1':'S','2':'N','3':'R','4':'B'}[e.key];
+    if(t&&!pending&&(t==='S'||hands[turn][t]>0)){trayT=t;moveKey=null;updateUI();}
+    if(e.key==='Escape'&&moveKey){moveKey=null;updateUI();}
+    if(e.key==='e'||e.key==='E'){floor=Math.min(F-1,floor+1);updateUI();}
+    if(e.key==='q'||e.key==='Q'){floor=Math.max(0,floor-1);updateUI();}
+  },sig);
+
+  /* --- bot --- */
+  const Wt=c=>c>=N?1e7:([0,1,10,90,800,6000][c]||0);
+  function wScore(x,f,z,a,b,d,me){
+    let A=0,B=0;
+    for(let i=0;i<N;i++){const ff=f+b*i;if(ff<0||ff>=F)return 0;const c=cells.get(K(x+a*i,ff,z+d*i));if(c){if(c.p===me)A++;else B++;}}
+    if(A&&B)return 0;if(A)return Wt(A);if(B)return -Wt(B)*1.6;return 0;
+  }
+  function winsThrough(pts){
+    const m=new Map();
+    for(const[x,f,z]of pts)for(let di=0;di<D13.length;di++){const[a,b,d]=D13[di];
+      for(let o=0;o<N;o++){const X=x-a*o,Y=f-b*o,Z=z-d*o;m.set(X+','+Y+','+Z+','+di,[X,Y,Z,a,b,d]);}}
+    return[...m.values()];
+  }
+  const evalW=(ws,me)=>{let t=0;for(const w of ws)t+=wScore(w[0],w[1],w[2],w[3],w[4],w[5],me);return t;};
+  function actions(me,moves=true){
+    const acts=[];
+    for(const kk of placeCells()){const[x,f,z]=PK(kk);acts.push({type:'place',x,f,z,t:'S'});}
+    if(moves)for(const[kk,c]of cells)if(c.p===me&&c.t!=='S'){const[x,f,z]=PK(kk);
+      for(const[tx,tf,tz]of targets(x,f,z))acts.push({type:'move',fx:x,ff:f,fz:z,tx,tf,tz});}
+    return acts;
+  }
+  function simulate(a,me,fn){
+    if(a.type==='place'){const kk=K(a.x,a.f,a.z);cells.set(kk,{p:me,t:a.t});const r=fn();cells.delete(kk);return r;}
+    const fk=K(a.fx,a.ff,a.fz),tk=K(a.tx,a.tf,a.tz),c=cells.get(fk),cap=cells.get(tk);
+    cells.delete(fk);cells.set(tk,c);const r=fn();cells.set(fk,c);if(cap)cells.set(tk,cap);else cells.delete(tk);return r;
+  }
+  const dest=a=>a.type==='place'?[a.x,a.f,a.z]:[a.tx,a.tf,a.tz];
+  const wins=(a,p)=>{const[x,f,z]=dest(a);return simulate(a,p,()=>!!lineAt(x,f,z,p));};
+  const canWinNow=p=>actions(p).some(a=>wins(a,p));
+  function botCard(){
+    const me=turn;if(cardUsed||placed)return false;
+    if(cfg.opp==='bot-easy'&&Math.random()<0.5)return false;
+    let best=null;
+    cardH[me].forEach((cd,i)=>{
+      if(!playable(cd,me))return;
+      let v=cd.t==='skip'?350:cd.t==='p2'?300:0,tgt=null;
+      if(cd.t==='rev'||cd.t==='wild')for(const[kk,c]of cells){
+        if(c.p===me||(cd.t==='rev'&&c.t!=='S'))continue;
+        const ws=winsThrough([PK(kk)]),before=evalW(ws,me);let after;
+        if(cd.t==='rev'){c.p=me;after=evalW(ws,me);c.p=1-me;}else{cells.delete(kk);after=evalW(ws,me);cells.set(kk,c);}
+        if(after-before>v){v=after-before;tgt=kk;}
+      }
+      if(!best||v>best.v)best={i,v,tgt};
+    });
+    if(!best||best.v<200)return false;
+    playCard(best.i);
+    if(best.tgt)setTimeout(()=>{if(alive&&pending)resolvePending(best.tgt);},500);
+    else maybeBot();
+    return true;
+  }
+  function botTurn(){
+    if(!alive||over||!isBot(turn)||pending)return;
+    if(botCard())return;
+    const me=turn,opp=1-me,diff=cfg.opp;
+    const acts=actions(me,!placed);
+    const win=acts.find(a=>wins(a,me));
+    if(win)return exec(win);
+    const noise=diff==='bot-easy'?500:diff==='bot-normal'?4:1;
+    for(const a of acts){
+      const pts=a.type==='place'?[[a.x,a.f,a.z]]:[[a.fx,a.ff,a.fz],[a.tx,a.tf,a.tz]];
+      const ws=winsThrough(pts),before=evalW(ws,me);
+      a.s=simulate(a,me,()=>evalW(ws,me))-before+Math.random()*noise;
+    }
+    acts.sort((a,b)=>b.s-a.s);
+    const look=diff==='bot-hard'?16:diff==='bot-normal'?6:0;
+    let pick=acts[0];
+    if(placesLeft<=1)for(const a of acts.slice(0,look)){if(!simulate(a,me,()=>canWinNow(opp))){pick=a;break;}}
+    if(pick.type==='place'){
+      const av=['N','R','B'].filter(t=>hands[me][t]>0);
+      if(av.length&&Math.random()<0.45)pick.t=av[Math.floor(Math.random()*av.length)];
+    }
+    exec(pick);
+  }
+  function exec(a){a.type==='place'?doPlace(a.x,a.f,a.z,a.t):doMove(a.fx,a.ff,a.fz,a.tx,a.tf,a.tz);}
+  function maybeBot(){clearTimeout(botTimer);if(!over&&isBot(turn))botTimer=setTimeout(botTurn,550);}
+
+  const clock=new THREE.Clock();
+  (function loop(){
+    if(!alive)return;requestAnimationFrame(loop);
+    controls.update();const t=clock.getElapsedTime();
+    for(const g of pmap.values()){
+      g.quaternion.copy(camera.quaternion);
+      g.scale.setScalar(g.userData.win?1+0.18*Math.sin(t*6):Math.min(1,g.scale.x+0.12));
+    }
+    renderer.render(scene,camera);
+  })();
+
+  reset();
+  return{
+    restart(){first^=1;reset();},
+    destroy(){alive=false;clearTimeout(botTimer);ac.abort();controls.dispose();renderer.dispose();box.innerHTML='';box.style.display='none';
+      ui.remove();document.body.classList.remove('mega');$('#tray').innerHTML='';},
+    center,
+    help:()=>`<h2>⭐ Everything</h2><ul>
+      <li>Get <b>${N} in a row</b> in ANY 3D direction: across a floor, straight up through the floors, or diagonally through them.</li>
+      <li>There are <b>${F} floors</b> stacked on top of each other. Pick which one you're placing on with the <b>F1–F${F}</b> buttons (or Q/E keys).</li>
+      <li>The board never ends. You can place within 2 squares (sideways) of any piece on any floor.</li>
+      <li>Each turn: <b>optionally play 1 UNO card first</b>, then place a piece <b>or</b> move a chess piece.</li>
+      <li><b>Knight ♞</b> jumps in an L, even between floors. <b>Rook ♜</b> slides up to 3 straight (up/down too). <b>Bishop ♝</b> slides up to 3 diagonally (between floors too). Land on an enemy to capture it.</li>
+      <li><b>UNO cards</b>: you draw 1 each turn (max 5). Like real UNO, you can only play a card that matches the top card's <b>color or symbol</b>. Wilds always work.
+        <br>⊘ <b>Skip</b>: your opponent misses their next turn.
+        <br>⇄ <b>Reverse</b>: flip one enemy mark to your side.
+        <br>+2 <b>Draw Two</b>: place 2 pieces this turn.
+        <br>W <b>Wild</b>: blast away any enemy piece.</li>
+      <li>Drag to spin · right-drag or two fingers to slide around · scroll/pinch to zoom · ⌖ recenters.</li></ul>`
   };
 }
 </script>
