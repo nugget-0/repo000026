@@ -804,7 +804,7 @@ async function megaGame(){
   const dl=new THREE.DirectionalLight(0xffffff,1.4);dl.position.set(6,14,8);scene.add(dl);
   const pos=(x,f,z)=>new THREE.Vector3(x,f*FH,z);
   function center(){
-    let a=0,b=0,n=0;for(const key of cells.keys()){const[x,,z]=PK(key);a+=x;b+=z;n++;}
+    let a=0,b=0,n=0;if(cells)for(const key of cells.keys()){const[x,,z]=PK(key);a+=x;b+=z;n++;}
     const t=new THREE.Vector3(n?a/n:0,FH*(F-1)/2,n?b/n:0);
     controls.target.copy(t);camera.position.set(t.x+7,t.y+9,t.z+11);controls.update();
   }
