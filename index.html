@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>Nugget Tac Toe</title>
-<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"}}</script>
+<script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js"}}</script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden;background:#0d1020;color:#eef;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
@@ -156,10 +156,27 @@ async function startGame(){
   if(cfg.mode==='chaos'){game=chaosGame();return;}
   $('#loading').classList.add('on');
   try{game=await(cfg.mode==='mega'?megaGame():cubeGame());}
-  catch(err){console.error(err);alert('Could not load the 3D mode (it needs internet to load Three.js).');show('menu');}
+  catch(err){console.error(err);alert('Could not load the 3D part: '+(err&&err.message||err));show('menu');}
   $('#loading').classList.remove('on');
 }
 
+
+/* ---------- 3D loader: tries the copy in this repo first, then two CDNs ---------- */
+let threeCache=null;
+async function loadThree(){
+  if(threeCache)return threeCache;
+  const tries=[
+    ['./lib/three.module.js','./lib/OrbitControls.js'],
+    ['https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js','https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/controls/OrbitControls.js'],
+    ['https://unpkg.com/three@0.160.0/build/three.module.js?module','https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js?module']
+  ];
+  let lastErr;
+  for(const[a,b]of tries){
+    try{const THREE=await import(a);const{OrbitControls}=await import(b);return threeCache={THREE,OrbitControls};}
+    catch(e){lastErr=e;console.warn('3D load failed from',a,e);}
+  }
+  throw lastErr;
+}
 /* =====================================================
    CHAOS GRID (2D, endless, chess pieces)
    ===================================================== */
@@ -458,8 +475,7 @@ function chaosGame(){
    CUBE 3D
    ===================================================== */
 async function cubeGame(){
-  const THREE=await import('three');
-  const{OrbitControls}=await import('three/addons/controls/OrbitControls.js');
+  const{THREE,OrbitControls}=await loadThree();
   const S=cfg.cube,NN=S*S*S,box=$('#three'),ac=new AbortController(),sig={signal:ac.signal};
   box.style.display='block';
   let alive=true,board,turn,over,moves,first=0,botTimer,sp=1.4;
@@ -640,8 +656,7 @@ async function cubeGame(){
    EVERYTHING MODE: endless board + 3D floors + chess + UNO
    ===================================================== */
 async function megaGame(){
-  const THREE=await import('three');
-  const{OrbitControls}=await import('three/addons/controls/OrbitControls.js');
+  const{THREE,OrbitControls}=await loadThree();
   const N=cfg.win,F=N,FH=1.7,box=$('#three'),ac=new AbortController(),sig={signal:ac.signal};
   box.style.display='block';document.body.classList.add('mega');
   const ui=document.createElement('div');ui.innerHTML='<div id="floors"></div><div id="cards"></div>';$('#game').appendChild(ui);
