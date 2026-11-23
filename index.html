@@ -55,6 +55,9 @@ h1 .x{color:#ff8a3d}h1 .o{color:#3dc8ff}
 #toast{position:absolute;top:70px;left:50%;transform:translateX(-50%);background:#ff4d6d;color:#fff;font-weight:800;padding:8px 16px;border-radius:10px;opacity:0;transition:opacity .25s;pointer-events:none}
 #toast.on{opacity:1}
 #loading{z-index:5}
+#online{position:fixed;z-index:20}
+#online input{font:inherit;font-size:26px;font-weight:800;letter-spacing:6px;text-transform:uppercase;width:170px;text-align:center;padding:10px;border-radius:12px;border:2px solid #2d3266;background:#0d1020;color:#eef}
+#roomCode{font-size:48px;letter-spacing:8px;color:#ffd23d}
 #floors{position:absolute;right:10px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:6px}
 #floors button{width:54px;height:46px;border-radius:10px;border:2px solid #2d3266;background:rgba(26,29,58,.95);cursor:pointer;font-weight:800}
 #floors button.sel{border-color:#ffd23d;background:#ffd23d;color:#1a1300}
@@ -79,7 +82,7 @@ body.mega #hint{bottom:calc(178px + env(safe-area-inset-bottom))}
   </div>
   <div class="opts">
     <div class="row"><label>Opponent</label>
-      <div class="seg" data-key="opp"><button data-val="bot-easy">Bot Easy</button><button data-val="bot-normal" class="sel">Bot Normal</button><button data-val="bot-hard">Bot Hard</button><button data-val="2p">2 Players</button></div></div>
+      <div class="seg" data-key="opp"><button data-val="bot-easy">Bot Easy</button><button data-val="bot-normal" class="sel">Bot Normal</button><button data-val="bot-hard">Bot Hard</button><button data-val="2p">2 Players</button><button data-val="online">🌐 Online</button></div></div>
     <div class="row" id="rowWin"><label>To win</label>
       <div class="seg" data-key="win"><button data-val="4" class="sel">4 in a row</button><button data-val="5">5 in a row</button></div></div>
     <div class="row" id="rowCube" style="display:none"><label>Cube size</label>
@@ -87,6 +90,21 @@ body.mega #hint{bottom:calc(178px + env(safe-area-inset-bottom))}
   </div>
   <button class="big" id="play">Play</button>
 </div>
+
+<div id="online" class="ov"><div class="card">
+  <h2>🌐 Online</h2>
+  <div id="onMain" style="display:flex;flex-direction:column;gap:12px;align-items:center">
+    <button class="big" id="bHost">Create room</button>
+    <p style="opacity:.75">or join a friend's room:</p>
+    <div class="row"><input id="joinCode" maxlength="5" placeholder="CODE" autocomplete="off"><button class="big alt" id="bJoin">Join</button></div>
+  </div>
+  <div id="onWait" style="display:none;flex-direction:column;gap:10px;align-items:center">
+    <p style="opacity:.75">Room code</p><div id="roomCode"></div>
+    <button id="bCopy" class="big alt">Copy invite link</button>
+  </div>
+  <p id="onStatus" style="opacity:.85"></p>
+  <button id="bOnClose" class="big alt">Cancel</button>
+</div></div>
 
 <div id="game" class="screen">
   <canvas id="cv"></canvas>
@@ -109,7 +127,12 @@ body.mega #hint{bottom:calc(178px + env(safe-area-inset-bottom))}
 const $=s=>document.querySelector(s);
 const COL=['#ff8a3d','#3dc8ff'], XO=['X','O'];
 const cfg={mode:'mega',opp:'bot-normal',win:4,cube:4};
-const isBot=p=>cfg.opp!=='2p'&&p===1;
+let NET=null,seedRng=null;
+const isBot=p=>!NET&&cfg.opp!=='2p'&&cfg.opp!=='online'&&p===1;
+const noInput=p=>NET?p!==NET.me:isBot(p);
+const rand=()=>seedRng?seedRng():Math.random();
+function mulberry32(a){return function(){a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
+const netSend=a=>{if(NET)NET.send({t:'act',a});};
 
 /* ---------- menu ---------- */
 document.querySelectorAll('.seg').forEach(seg=>seg.addEventListener('click',e=>{
@@ -129,28 +152,144 @@ function show(id){document.querySelectorAll('.screen').forEach(s=>s.classList.to
 let game=null;
 function setTurn(turn,over){
   $('#turnDot').style.background=COL[turn];
-  $('#turnText').textContent=over?'Game over':isBot(turn)?'Bot is thinking…':cfg.opp==='2p'?`${XO[turn]}'s turn`:'Your turn';
+  $('#turnText').textContent=over?'Game over':NET?(turn===NET.me?'Your turn':"Friend's turn"):isBot(turn)?'Bot is thinking…':cfg.opp==='2p'?`${XO[turn]}'s turn`:'Your turn';
 }
 let toastT;
 function toast(msg){const t=$('#toast');t.textContent=msg;t.classList.add('on');clearTimeout(toastT);toastT=setTimeout(()=>t.classList.remove('on'),1200);}
 function finish(w){
   setTimeout(()=>{
-    $('#overText').textContent=w<0?"It's a draw!":isBot(w)?'Bot wins!':cfg.opp!=='2p'?'You win!':`${XO[w]} wins!`;
+    $('#overText').textContent=w<0?"It's a draw!":NET?(w===NET.me?'You win!':'Friend wins!'):isBot(w)?'Bot wins!':cfg.opp!=='2p'?'You win!':`${XO[w]} wins!`;
     $('#overText').style.color=w<0?'#eef':COL[w];
-    $('#overSub').textContent=w<0?'Nobody got a line.':isBot(w)?'Rematch?':'Nice one.';
+    $('#overSub').textContent=w<0?'Nobody got a line.':(NET?w!==NET.me:isBot(w))?'Rematch?':'Nice one.';
     $('#over').classList.add('on');
   },1000);
 }
-$('#play').onclick=startGame;
-$('#bRestart').onclick=()=>{$('#over').classList.remove('on');game&&game.restart();};
+$('#play').onclick=()=>cfg.opp==='online'?openOnline():startGame();
+$('#bRestart').onclick=()=>{$('#over').classList.remove('on');netSend({type:'restart'});game&&game.restart();};
 $('#bAgain').onclick=$('#bRestart').onclick;
-$('#bMenu').onclick=$('#bToMenu').onclick=()=>{$('#over').classList.remove('on');if(game)game.destroy();game=null;show('menu');};
+$('#bMenu').onclick=$('#bToMenu').onclick=()=>{$('#over').classList.remove('on');netLeave();if(game)game.destroy();game=null;show('menu');};
 $('#bHelp').onclick=()=>{$('#helpBody').innerHTML=game?game.help():'';$('#help').classList.add('on');};
 $('#bHelpClose').onclick=()=>$('#help').classList.remove('on');
 $('#bCenter').onclick=()=>game&&game.center();
 
+/* ---------- ONLINE (MQTT over WebSocket, public broker, no server needed) ---------- */
+function mqttConnect(onMsg,onOpen,onClose){
+  const ws=new WebSocket('wss://broker.hivemq.com:8884/mqtt',['mqtt']);ws.binaryType='arraybuffer';
+  const enc=new TextEncoder(),dec=new TextDecoder();
+  const str=s=>{const b=enc.encode(s);return[b.length>>8,b.length&255,...b];};
+  const vlen=n=>{const o=[];do{let d=n%128;n=Math.floor(n/128);if(n>0)d|=128;o.push(d);}while(n>0);return o;};
+  const pkt=(h,body)=>new Uint8Array([h,...vlen(body.length),...body]);
+  let buf=new Uint8Array(0),ping=null,closed=false;
+  ws.onopen=()=>ws.send(pkt(0x10,[...str('MQTT'),4,2,0,60,...str('ntt'+Math.random().toString(36).slice(2,12))]));
+  ws.onmessage=e=>{
+    const d=new Uint8Array(e.data),nb=new Uint8Array(buf.length+d.length);nb.set(buf);nb.set(d,buf.length);buf=nb;
+    while(buf.length>=2){
+      let m=1,v=0,i=1,b;
+      do{if(i>=buf.length)return;b=buf[i++];v+=(b&127)*m;m*=128;}while(b&128);
+      if(buf.length<i+v)return;
+      const type=buf[0]>>4,flags=buf[0]&15,body=buf.slice(i,i+v);buf=buf.slice(i+v);
+      if(type===2){ping=setInterval(()=>{if(ws.readyState===1)ws.send(new Uint8Array([0xC0,0]));},25000);onOpen();}
+      else if(type===3){const tl=(body[0]<<8)|body[1],topic=dec.decode(body.slice(2,2+tl));let q=2+tl;if((flags>>1)&3)q+=2;onMsg(topic,dec.decode(body.slice(q)));}
+    }
+  };
+  const done=()=>{clearInterval(ping);if(!closed){closed=true;onClose&&onClose();}};
+  ws.onclose=done;ws.onerror=done;
+  return{
+    sub:t=>ws.send(pkt(0x82,[0,1,...str(t),0])),
+    pub:(t,msg)=>{if(ws.readyState===1)ws.send(pkt(0x30,[...str(t),...enc.encode(msg)]));},
+    close(){closed=true;clearInterval(ping);try{ws.send(new Uint8Array([0xE0,0]));}catch(e){}try{ws.close();}catch(e){}}
+  };
+}
+const myId=Math.random().toString(36).slice(2,10);
+let lobby=null,hbTimer=null,lastSeen=0,leftShown=false;
+function openOnline(){
+  $('#onMain').style.display='flex';$('#onWait').style.display='none';$('#onStatus').textContent='';
+  $('#online').classList.add('on');
+}
+function closeLobby(){if(lobby&&!NET)lobby.close();lobby=null;}
+$('#bOnClose').onclick=()=>{closeLobby();$('#online').classList.remove('on');};
+function roomTopic(code){return 'nuggettactoe/v1/'+code.toUpperCase();}
+function connectRoom(code,onReady,onMsg){
+  closeLobby();
+  $('#onStatus').textContent='Connecting…';
+  const topic=roomTopic(code);
+  const c=mqttConnect((t,raw)=>{let m;try{m=JSON.parse(raw);}catch(e){return;}if(m.from===myId)return;onMsg(m);},
+    ()=>{c.sub(topic);onReady();},
+    ()=>{if(NET){toast('Connection lost');}else $('#onStatus').textContent="Couldn't reach the online server. Try again, or check your internet.";});
+  c.send=o=>c.pub(topic,JSON.stringify({...o,from:myId}));
+  lobby=c;return c;
+}
+function beginOnline(c,me,seed,code){
+  NET={me,seed,code,send:c.send,conn:c};lastSeen=Date.now();leftShown=false;
+  clearInterval(hbTimer);
+  hbTimer=setInterval(()=>{
+    if(!NET)return;NET.send({t:'hb'});
+    if(!leftShown&&Date.now()-lastSeen>15000){leftShown=true;toast('Friend disconnected');}
+  },4000);
+  $('#online').classList.remove('on');
+  startGame();
+}
+function onGameMsg(m){
+  lastSeen=Date.now();
+  if(m.t==='act'&&game){
+    if(m.a.type==='restart'){$('#over').classList.remove('on');game.restart();}
+    else game.apply(m.a);
+  }
+  if(m.t==='bye'){leftShown=true;toast('Friend left the game');}
+}
+$('#bHost').onclick=()=>{
+  const A='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let code='';for(let i=0;i<5;i++)code+=A[Math.floor(Math.random()*A.length)];
+  let started=false,guest=null;
+  const c=connectRoom(code,()=>{
+    $('#onMain').style.display='none';$('#onWait').style.display='flex';$('#roomCode').textContent=code;
+    $('#onStatus').textContent='Waiting for a friend to join…';
+  },m=>{
+    if(started&&m.t==='join'&&m.from===guest)return;
+    if(!started&&m.t==='join'){
+      started=true;guest=m.from;const seed=Math.floor(Math.random()*2**31);
+      c.send({t:'start',to:m.from,cfg:{mode:cfg.mode,win:cfg.win,cube:cfg.cube},seed});
+      beginOnline(c,0,seed,code);
+    }else if(started&&m.t==='join'){c.send({t:'full',to:m.from});}
+    else if(started)onGameMsg(m);
+  });
+  $('#bCopy').onclick=()=>{
+    const url=location.href.split('?')[0].split('#')[0]+'?room='+code;
+    (navigator.clipboard?navigator.clipboard.writeText(url):Promise.reject()).then(()=>toastMenu('Link copied!'),()=>prompt('Copy this link:',url));
+  };
+};
+function joinRoom(code){
+  code=(code||'').trim().toUpperCase();if(code.length<4){$('#onStatus').textContent='Type the room code first.';return;}
+  let started=false,tries=0,retry=null;
+  const c=connectRoom(code,()=>{
+    $('#onStatus').textContent='Joining room '+code+'…';
+    const ask=()=>{if(started)return;if(++tries>4){clearInterval(retry);$('#onStatus').textContent="Couldn't find that room. Check the code, and make sure your friend is still waiting.";return;}c.send({t:'join'});};
+    ask();retry=setInterval(ask,2500);
+  },m=>{
+    if(m.to&&m.to!==myId)return;
+    if(!started&&m.t==='start'){
+      started=true;clearInterval(retry);
+      Object.assign(cfg,m.cfg);cfg.opp='online';
+      beginOnline(c,1,m.seed,code);
+    }else if(!started&&m.t==='full'){clearInterval(retry);$('#onStatus').textContent='That room already has 2 players.';}
+    else if(started)onGameMsg(m);
+  });
+}
+$('#bJoin').onclick=()=>joinRoom($('#joinCode').value);
+$('#joinCode').addEventListener('keydown',e=>{if(e.key==='Enter')joinRoom($('#joinCode').value);});
+function netLeave(){
+  if(!NET)return;
+  try{NET.send({t:'bye'});}catch(e){}
+  const c=NET.conn;NET=null;seedRng=null;clearInterval(hbTimer);lobby=null;
+  setTimeout(()=>c.close(),200);
+}
+function toastMenu(msg){$('#onStatus').textContent=msg;}
+addEventListener('beforeunload',()=>{if(NET)NET.send({t:'bye'});});
+// invite links: ?room=CODE joins straight away
+{const r=new URLSearchParams(location.search).get('room');if(r){openOnline();$('#joinCode').value=r.toUpperCase();joinRoom(r);}}
+
 async function startGame(){
   if(game)game.destroy();game=null;
+  seedRng=NET?mulberry32(NET.seed):null;
   $('#over').classList.remove('on');$('#tray').innerHTML='';$('#hint').textContent='';
   show('game');
   if(cfg.mode==='chaos'){game=chaosGame();return;}
@@ -257,11 +396,11 @@ function chaosGame(){
 
   /* --- input --- */
   function tap(x,y){
-    if(over||isBot(turn))return;
+    if(over||noInput(turn))return;
     const key=k(x,y),c=cells.get(key);
     if(moveKey){
       const[fx,fy]=pk(moveKey);
-      if(targets(fx,fy).some(a=>a[0]===x&&a[1]===y)){doMove(fx,fy,x,y);return;}
+      if(targets(fx,fy).some(a=>a[0]===x&&a[1]===y)){human({type:'move',fx,fy,tx:x,ty:y});return;}
     }
     if(c&&c.p===turn&&c.t!=='S'){
       moveKey=moveKey===key?null:key;
@@ -269,7 +408,7 @@ function chaosGame(){
       updateUI();return;
     }
     moveKey=null;
-    if(!c&&canPlace(x,y)){doPlace(x,y,trayT);return;}
+    if(!c&&canPlace(x,y)){human({type:'place',x,y,t:trayT});return;}
     updateUI();
   }
   const ptrs=new Map();let drag=null,pinch=null;
@@ -299,7 +438,7 @@ function chaosGame(){
   cv.addEventListener('wheel',e=>{e.preventDefault();zoomAt(e.clientX,e.clientY,cam.z*Math.exp(-e.deltaY*0.0015));},{signal:ac.signal,passive:false});
   addEventListener('resize',()=>{resize();draw();},sig);
   addEventListener('keydown',e=>{
-    if(over||isBot(turn))return;
+    if(over||noInput(turn))return;
     const t={'1':'S','2':'N','3':'R','4':'B'}[e.key];
     if(t&&(t==='S'||hands[turn][t]>0)){trayT=t;moveKey=null;updateUI();}
     if(e.key==='Escape'){moveKey=null;updateUI();}
@@ -317,7 +456,7 @@ function chaosGame(){
   function updateUI(){
     setTurn(turn,over);
     const tray=$('#tray');tray.innerHTML='';
-    const h=hands[turn],locked=over||isBot(turn);
+    const h=hands[turn],locked=over||noInput(turn);
     for(const t of['S','N','R','B']){
       const b=document.createElement('button');
       b.className='tb'+(trayT===t&&!moveKey&&!locked?' sel':'');
@@ -327,7 +466,7 @@ function chaosGame(){
       b.onclick=()=>{trayT=t;moveKey=null;updateUI();};
       tray.appendChild(b);
     }
-    $('#hint').textContent=over?'':isBot(turn)?'':moveKey
+    $('#hint').textContent=over?'':noInput(turn)?'':moveKey
       ?'Tap a green dot to move · red ring = capture · tap the piece again to cancel'
       :`Place a ${PNAME[trayT]} on a lit square · tap your ♞♜♝ on the board to move them · ${N} in a row wins`;
     draw();
@@ -361,7 +500,7 @@ function chaosGame(){
     // the "original" 3x3
     ctx.fillStyle='rgba(255,210,61,0.05)';ctx.fillRect(sx(-1),sy(-1),3*z,3*z);
     // lit placement squares
-    if(!over&&!isBot(turn)&&!moveKey){
+    if(!over&&!noInput(turn)&&!moveKey){
       ctx.fillStyle=turn?'rgba(61,200,255,0.11)':'rgba(255,138,61,0.11)';
       for(const kk of placeCells()){const[x,y]=pk(kk);if(x<x0||x>x1||y<y0||y>y1)continue;ctx.fillRect(sx(x)+2,sy(y)+2,z-4,z-4);}
     }
@@ -451,11 +590,13 @@ function chaosGame(){
     exec(pick);
   }
   function exec(a){a.type==='place'?doPlace(a.x,a.y,a.t):doMove(a.fx,a.fy,a.tx,a.ty);}
+  function human(a){netSend(a);exec(a);}
   function maybeBot(){if(!over&&isBot(turn))botTimer=setTimeout(botTurn,450);}
 
   resize();reset();
   return{
     restart(){first^=1;reset();},
+    apply:a=>exec(a),
     destroy(){alive=false;clearTimeout(botTimer);ac.abort();cv.style.display='none';$('#tray').innerHTML='';},
     center,
     help:()=>`<h2>♞ Chaos Grid</h2><ul>
@@ -574,7 +715,7 @@ async function cubeGame(){
 
   function updateUI(){
     setTurn(turn,over);
-    $('#hint').textContent=over||isBot(turn)?'':`Drag to spin · tap a dot to place · ${S} in a row in ANY direction, even through the cube`;
+    $('#hint').textContent=over||noInput(turn)?'':`Drag to spin · tap a dot to place · ${S} in a row in ANY direction, even through the cube`;
   }
   // spread slider
   $('#tray').innerHTML=`<label class="spread">Spread <input type="range" id="spread" min="1" max="2.6" step="0.05" value="${sp}"></label>`;
@@ -598,11 +739,11 @@ async function cubeGame(){
   el.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY};},sig);
   el.addEventListener('pointermove',e=>{
     if(e.pointerType!=='mouse'||down)return;
-    setHover(over||isBot(turn)?-1:pick(e));
+    setHover(over||noInput(turn)?-1:pick(e));
   },sig);
   el.addEventListener('pointerup',e=>{
-    if(down&&Math.hypot(e.clientX-down.x,e.clientY-down.y)<7&&!over&&!isBot(turn)){
-      const i=pick(e);if(i>=0){setHover(-1);place(i);}
+    if(down&&Math.hypot(e.clientX-down.x,e.clientY-down.y)<7&&!over&&!noInput(turn)){
+      const i=pick(e);if(i>=0){setHover(-1);netSend({type:'place',i});place(i);}
     }
     down=null;
   },sig);
@@ -628,6 +769,7 @@ async function cubeGame(){
     place(best);
   }
   function maybeBot(){if(!over&&isBot(turn))botTimer=setTimeout(botTurn,500);}
+  function exec(a){if(a.type==='place')place(a.i);}
 
   const clock=new THREE.Clock();
   (function loop(){
@@ -642,6 +784,7 @@ async function cubeGame(){
   reset();
   return{
     restart(){first^=1;reset();},
+    apply:a=>exec(a),
     destroy(){alive=false;clearTimeout(botTimer);ac.abort();controls.dispose();renderer.dispose();box.innerHTML='';box.style.display='none';$('#tray').innerHTML='';},
     center,
     help:()=>`<h2>🧊 Cube 3D</h2><ul>
@@ -663,7 +806,7 @@ async function megaGame(){
   let alive=true,first=0,botTimer;
   let cells,turn,hands,cardH,top,trayT,moveKey,over,moveCount,last,winCells,floor=0,pending,placesLeft,placed,skipNext,cardUsed;
   const K=(x,f,z)=>x+','+f+','+z,PK=s=>s.split(',').map(Number),inF=f=>f>=0&&f<F;
-  const who=p=>isBot(p)?'Bot':cfg.opp==='2p'?XO[p]:'You';
+  const who=p=>NET?(p===NET.me?'You':'Friend'):isBot(p)?'Bot':cfg.opp==='2p'?XO[p]:'You';
 
   // directions: [dx, dFloor, dz]
   const D13=[],R6=[],B12=[],N24=[];
@@ -678,7 +821,7 @@ async function megaGame(){
   const CCOL=['#e53935','#fdd835','#43a047','#1e88e5'],CSYM={skip:'⊘',rev:'⇄',p2:'+2',wild:'W'};
   const CNAME={skip:'Skip',rev:'Reverse',p2:'Draw Two',wild:'Wild'};
   const CDESC={skip:'Your opponent misses their next turn',rev:'Flip one enemy mark to your side',p2:'Place 2 pieces this turn',wild:'Blast away any enemy piece'};
-  const drawCard=()=>Math.random()<0.15?{t:'wild',c:-1}:{t:['skip','rev','p2'][Math.floor(Math.random()*3)],c:Math.floor(Math.random()*4)};
+  const drawCard=()=>rand()<0.15?{t:'wild',c:-1}:{t:['skip','rev','p2'][Math.floor(rand()*3)],c:Math.floor(rand()*4)};
 
   /* --- rules --- */
   function near(x,z){for(const key of cells.keys()){const[a,,c]=PK(key);if(Math.abs(a-x)<=PLACE_DIST&&Math.abs(c-z)<=PLACE_DIST)return true;}return false;}
@@ -776,11 +919,11 @@ async function megaGame(){
 
   /* --- clicks --- */
   function clickKey(key){
-    if(over||isBot(turn))return;
-    if(pending){resolvePending(key);return;}
+    if(over||noInput(turn))return;
+    if(pending){if(validPend(key))netSend({type:'pend',key});resolvePending(key);return;}
     const[x,f,z]=PK(key),c=cells.get(key);
     if(moveKey){const[a,b,d]=PK(moveKey);
-      if(targets(a,b,d).some(t=>t[0]===x&&t[1]===f&&t[2]===z)){doMove(a,b,d,x,f,z);return;}}
+      if(targets(a,b,d).some(t=>t[0]===x&&t[1]===f&&t[2]===z)){human({type:'move',fx:a,ff:b,fz:d,tx:x,tf:f,tz:z});return;}}
     if(c&&c.p===turn&&c.t!=='S'){
       if(placed){toast('Finish placing first!');return;}
       moveKey=moveKey===key?null:key;
@@ -788,7 +931,7 @@ async function megaGame(){
       updateUI();return;
     }
     moveKey=null;
-    if(!c&&canPlace(x,f,z)){doPlace(x,f,z,trayT);return;}
+    if(!c&&canPlace(x,f,z)){human({type:'place',x,f,z,t:trayT});return;}
     updateUI();
   }
 
@@ -862,7 +1005,7 @@ async function megaGame(){
     plane.position.y=floor*FH;
     // lit squares on the current floor
     let n=0;
-    if(!over&&!isBot(turn)&&!moveKey&&!pending){
+    if(!over&&!noInput(turn)&&!moveKey&&!pending){
       lit.material.color.set(COL[turn]);const m=new THREE.Matrix4();
       for(const kk of placeCells(floor)){if(n>=LIT_MAX)break;const[x,f,z]=PK(kk);m.makeTranslation(x,f*FH+0.01,z);lit.setMatrixAt(n++,m);}
     }
@@ -902,10 +1045,10 @@ async function megaGame(){
   /* --- UI --- */
   function updateUI(){
     setTurn(turn,over);
-    if(!over&&!isBot(turn)){let ex='';if(pending)ex=' · pick a target';else if(placesLeft>1)ex=' · place 2!';$('#turnText').textContent+=ex;}
+    if(!over&&!noInput(turn)){let ex='';if(pending)ex=' · pick a target';else if(placesLeft>1)ex=' · place 2!';$('#turnText').textContent+=ex;}
     // chess tray
     const tray=$('#tray');tray.innerHTML='';
-    const h=hands[turn],locked=over||isBot(turn)||!!pending;
+    const h=hands[turn],locked=over||noInput(turn)||!!pending;
     for(const t of['S','N','R','B']){
       const b=document.createElement('button');
       b.className='tb'+(trayT===t&&!moveKey&&!locked?' sel':'');b.style.setProperty('--c',COL[turn]);
@@ -917,19 +1060,19 @@ async function megaGame(){
     const cd=$('#cards');cd.innerHTML='';
     const tp=document.createElement('div');tp.className='uno top'+(top.t==='wild'?' wild':'');
     if(top.c>=0)tp.style.background=CCOL[top.c];tp.textContent=CSYM[top.t];tp.title='Top card: '+CNAME[top.t];cd.appendChild(tp);
-    const showP=cfg.opp==='2p'?turn:0;
+    const showP=NET?NET.me:cfg.opp==='2p'?turn:0;
     cardH[showP].forEach((card,i)=>{
       const b=document.createElement('button');b.className='uno'+(card.t==='wild'?' wild':'');
       if(card.c>=0)b.style.background=CCOL[card.c];b.textContent=CSYM[card.t];b.title=`${CNAME[card.t]}: ${CDESC[card.t]}`;
       if(over||showP!==turn||cardUsed||placed||pending||!playable(card,turn))b.disabled=true;
-      b.onclick=()=>{if(playCard(i))maybeBot();};cd.appendChild(b);
+      b.onclick=()=>{if(playable(card,turn)&&!cardUsed&&!placed&&!pending)netSend({type:'card',i});if(playCard(i))maybeBot();};cd.appendChild(b);
     });
-    if(cfg.opp!=='2p'){const w=document.createElement('span');w.className='who';w.textContent=`Bot: ${cardH[1].length} 🂠`;cd.appendChild(w);}
+    if(cfg.opp!=='2p'){const o=NET?1-NET.me:1;const w=document.createElement('span');w.className='who';w.textContent=`${NET?'Friend':'Bot'}: ${cardH[o].length} 🂠`;cd.appendChild(w);}
     // floors
     const fl=$('#floors');fl.innerHTML='';
     for(let f=F-1;f>=0;f--){const b=document.createElement('button');b.textContent='F'+(f+1);if(f===floor)b.className='sel';
       b.onclick=()=>{floor=f;updateUI();};fl.appendChild(b);}
-    $('#hint').textContent=over||isBot(turn)?'':pending==='rev'?'Tap an enemy mark to flip it to your side'
+    $('#hint').textContent=over||noInput(turn)?'':pending==='rev'?'Tap an enemy mark to flip it to your side'
       :pending==='wild'?'Tap any enemy piece to blast it'
       :moveKey?'Tap a green dot to move (can be on other floors!) · red ring = capture'
       :`Pick a floor (right) · place on a lit square · play a card first if you want · ${N} in a row in ANY 3D direction`;
@@ -950,7 +1093,7 @@ async function megaGame(){
   }
   el.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY};},sig);
   el.addEventListener('pointermove',e=>{
-    if(e.pointerType!=='mouse'||down||over||isBot(turn)||moveKey||pending){ghost.visible=false;return;}
+    if(e.pointerType!=='mouse'||down||over||noInput(turn)||moveKey||pending){ghost.visible=false;return;}
     setRay(e);const pl=ray.intersectObject(plane,false)[0];
     if(pl){const x=Math.round(pl.point.x),z=Math.round(pl.point.z);
       if(canPlace(x,floor,z)){ghost.visible=true;ghost.position.set(x,floor*FH+0.02,z);return;}}
@@ -962,7 +1105,7 @@ async function megaGame(){
   },sig);
   addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);},sig);
   addEventListener('keydown',e=>{
-    if(over||isBot(turn))return;
+    if(over||noInput(turn))return;
     const t={'1':'S','2':'N','3':'R','4':'B'}[e.key];
     if(t&&!pending&&(t==='S'||hands[turn][t]>0)){trayT=t;moveKey=null;updateUI();}
     if(e.key==='Escape'&&moveKey){moveKey=null;updateUI();}
@@ -1043,7 +1186,13 @@ async function megaGame(){
     }
     exec(pick);
   }
-  function exec(a){a.type==='place'?doPlace(a.x,a.f,a.z,a.t):doMove(a.fx,a.ff,a.fz,a.tx,a.tf,a.tz);}
+  function exec(a){
+    if(a.type==='card')return playCard(a.i);
+    if(a.type==='pend')return resolvePending(a.key);
+    a.type==='place'?doPlace(a.x,a.f,a.z,a.t):doMove(a.fx,a.ff,a.fz,a.tx,a.tf,a.tz);
+  }
+  function human(a){netSend(a);exec(a);}
+  function validPend(key){const c=cells.get(key);return c&&c.p!==turn&&!(pending==='rev'&&c.t!=='S');}
   function maybeBot(){clearTimeout(botTimer);if(!over&&isBot(turn))botTimer=setTimeout(botTurn,550);}
 
   const clock=new THREE.Clock();
@@ -1060,6 +1209,7 @@ async function megaGame(){
   reset();
   return{
     restart(){first^=1;reset();},
+    apply:a=>exec(a),
     destroy(){alive=false;clearTimeout(botTimer);ac.abort();controls.dispose();renderer.dispose();box.innerHTML='';box.style.display='none';
       ui.remove();document.body.classList.remove('mega');$('#tray').innerHTML='';},
     center,
